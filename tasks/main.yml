@@ -1,0 +1,158 @@
+---
+
+- name: Install repository key
+  apt_key:
+    id: "{{ sign_keys[zabbix_version][ansible_distribution_release]['sign_key'] }}"
+    url: http://repo.zabbix.com/zabbix-official-repo.key
+
+- name: Installing repository
+  apt_repository:
+    repo: "{{ item }} http://repo.zabbix.com/zabbix/{{ zabbix_version }}/{{ ansible_distribution.lower() }}/ {{ ansible_distribution_release }} main"
+    state: present
+  with_items:
+  - deb-src
+  - deb
+
+- name: Installing zabbix-agent
+  apt:
+    name: "{{ item }}"
+    state: latest
+    dpkg_options: 'force-confnew,force-confdef'
+    autoclean: yes
+    autoremove: yes
+    update_cache: yes
+    cache_valid_time: 0
+  with_items: "{{ zabbix_agent_packages }}"
+
+- name: Enable the service
+  systemd:
+    name: zabbix-agent
+    enabled: yes
+    state: started
+
+- name: Set default ip address for zabbix_agent_ip
+  set_fact:
+    zabbix_agent_ip: "{{ hostvars[inventory_hostname]['ansible_default_ipv4'].address }}"
+  when:
+  - zabbix_agent_ip is not defined
+  - "'ansible_default_ipv4' in hostvars[inventory_hostname]"
+
+- name: Fail invalid specified agent_listeninterface
+  fail:
+    msg: "The specified network interface does not exist"
+  when:
+  - zabbix_agent_listeninterface
+  - (zabbix_agent_listeninterface not in ansible_all_ipv4_addresses)
+
+- name: Get IP of agent_listeninterface when no agent_listenip specified
+  set_fact:
+    zabbix_agent_listenip: "{{ hostvars[inventory_hostname]['ansible_' + zabbix_agent_listeninterface]['ipv4'].address | default('0.0.0.0') }}"
+    zabbix_agent_ip: "{{ hostvars[inventory_hostname]['ansible_' + zabbix_agent_listeninterface]['ipv4'].address | default('0.0.0.0') }}"
+  when:
+  - zabbix_agent_listeninterface
+  - not zabbix_agent_listenip
+
+- name: Default agent_listenip to all when not specified
+  set_fact:
+    zabbix_agent_listenip: '0.0.0.0'
+  when:
+  - not zabbix_agent_listenip
+
+- name: Fail invalid specified agent_listenip
+  fail:
+    msg: "The agent_listenip does not exist"
+  when:
+  - zabbix_agent_listenip != '0.0.0.0'
+  - zabbix_agent_listenip != '127.0.0.1'
+  - (zabbix_agent_listenip not in ansible_all_ipv4_addresses)
+
+- name: Configure zabbix-agent
+  template:
+    src: zabbix_agentd.conf.j2
+    dest: /etc/zabbix/zabbix_agentd.conf
+    owner: root
+    group: root
+    mode: 0644
+  notify:
+  - restart zabbix-agent
+
+- name: Create directory for PSK file if not exist
+  file:
+    path: "{{ zabbix_agent_tlspskfile | dirname }}"
+    mode: 0755
+    state: directory
+  when:
+  - zabbix_agent_tlspskfile is defined
+  - zabbix_agent_tlspskfile != ''
+
+- name: Place TLS PSK File
+  copy:
+    dest: "{{ zabbix_agent_tlspskfile }}"
+    content: "{{ zabbix_agent_tlspsk_secret }}"
+    owner: zabbix
+    group: zabbix
+    mode: 0400
+  when:
+  - zabbix_agent_tlspskfile is defined
+  - zabbix_agent_tlspsk_secret is defined
+  - zabbix_agent_tlspskfile != ''
+  - zabbix_agent_tlspsk_secret != ''
+
+- name: Create include dir zabbix-agent
+  file:
+    path: "{{ zabbix_agent_include }}"
+    owner: root
+    group: root
+    state: directory
+
+- name: Make sure the zabbix-agent service is running
+  service:
+    name: zabbix-agent
+    state: started
+    enabled: yes
+
+- name: Create hostgroups
+  local_action:
+    module: zabbix_group
+    server_url: "{{ zabbix_url }}"
+    login_user: "{{ zabbix_api_user }}"
+    login_password: "{{ zabbix_api_pass }}"
+    host_group: "{{ zabbix_host_groups }}"
+    state: "{{ zabbix_create_hostgroup }}"
+  when:
+  - zabbix_api_create_hostgroup
+
+- name: Create a new host or update an existing hosts info
+  local_action:
+    module: zabbix_host
+    server_url: "{{ zabbix_url }}"
+    login_user: "{{ zabbix_api_user }}"
+    login_password: "{{ zabbix_api_pass }}"
+    host_name: "{{ zabbix_agent_hostname }}"
+    host_groups: "{{ zabbix_host_groups }}"
+    link_templates: "{{ zabbix_link_templates }}"
+    status: "{{ zabbix_host_status }}"
+    state: "{{ zabbix_create_host }}"
+    proxy: "{{ zabbix_proxy }}"
+    inventory_mode: "{{ zabbix_inventory_mode }}"
+    interfaces: "{{ zabbix_agent_interfaces }}"
+    visible_name: "{{ zabbix_visible_hostname|default(zabbix_agent_hostname) }}"
+  when:
+  - zabbix_api_create_hosts
+  changed_when: false
+
+- name: Updating host configuration with macros
+  local_action:
+    module: zabbix_hostmacro
+    server_url: "{{ zabbix_url }}"
+    login_user: "{{ zabbix_api_user }}"
+    login_password: "{{ zabbix_api_pass }}"
+    host_name: "{{ zabbix_agent_hostname }}"
+    macro_name: "{{ item.macro_key }}"
+    macro_value: "{{ item.macro_value }}"
+  with_items: "{{ zabbix_macros | default([]) }}"
+  when:
+  - zabbix_macros is defined
+  - item.macro_key is defined
+
+...

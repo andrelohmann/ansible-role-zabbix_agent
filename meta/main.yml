@@ -1,0 +1,17 @@
+---
+
+galaxy_info:
+  author: Andre Lohmann
+  description: Installing and maintaining zabbix-agent for Ubuntu.
+  license: MIT
+  min_ansible_version: 2.5
+  platforms:
+  - name: Ubuntu
+    versions:
+    - xenial
+    - bionic
+  categories:
+  - monitoring
+dependencies: []
+
+...

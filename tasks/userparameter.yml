@@ -1,0 +1,12 @@
+---
+
+- name: "Installing sample file"
+  copy:
+    src: sample.conf
+    dest: "{{ zabbix_agent_include }}/mysql.conf"
+    owner: zabbix
+    group: zabbix
+    mode: 0644
+  notify: restart zabbix-agent
+
+...
